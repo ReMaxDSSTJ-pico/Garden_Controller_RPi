@@ -1,6 +1,47 @@
-Nothing needs to be added to .gitignore since only a shell script file (`setup_cron.sh`) was added, which is a source/config file and should not be ignored.node_modules/
-.next/
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+
+# Dependencies
+.venv/
+venv/
+node_modules/
 dist/
 build/
+target/
+.gradle/
+
+# Logs and temp files
 *.log
-node_modules/
+*.tmp
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Cache directories
+.mypy_cache/
+.pytest_cache/.next/
