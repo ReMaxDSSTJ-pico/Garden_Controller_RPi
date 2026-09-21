@@ -1,45 +1,5 @@
-```
-# Compiled and build artifacts
-*.pyc
-__pycache__/
-*.o
-*.obj
-*.out
-*.exe
-*.dll
-*.so
-*.a
-
-# Dependencies
-.venv/
-venv/
-.env
-.env.local
-*.env.*
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Editors
-.vscode/
-.idea/
-
-# System files
-.DS_Store
-Thumbs.db
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Build directories
-build/
-dist/
-target/
-```node_modules/
+Nothing needs to be added to .gitignore since only a shell script file (`setup_cron.sh`) was added, which is a source/config file and should not be ignored.node_modules/
 .next/
-node_modules/
+dist/
+build/
+*.log
