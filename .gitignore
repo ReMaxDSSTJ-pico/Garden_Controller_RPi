@@ -1,5 +1,44 @@
-node_modules/
-.next/
-dist/
-build/
+```
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+*.out
+*.exe
+*.dll
+*.so
+*.a
+
+# Dependencies
+.venv/
+venv/
+.env
+.env.local
+*.env.*
+
+# Logs and temp files
 *.log
+*.tmp
+*.swp
+*.swo
+
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Build directories
+build/
+dist/
+target/
+```node_modules/
+.next/
