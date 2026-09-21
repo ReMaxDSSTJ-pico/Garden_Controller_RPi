@@ -3,3 +3,4 @@ Nothing needs to be added to .gitignore since only a shell script file (`setup_c
 dist/
 build/
 *.log
+node_modules/
