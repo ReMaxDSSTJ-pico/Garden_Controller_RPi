@@ -45,3 +45,4 @@ htmlcov/
 # Cache directories
 .mypy_cache/
 .pytest_cache/.next/
+.next/
