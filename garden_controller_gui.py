@@ -5,18 +5,22 @@ import datetime
 import time
 import os
 import sys
-import math
 
-# Try to import lgpio (Pi 5), fallback to RPi.GPIO (Pi 3/4)
+# --- GPIO Library Detection (Pi 5 vs Pi 3/4) ---
+USING_LGPIO = False
+h_chip = None
+
 try:
     import lgpio
     USING_LGPIO = True
+    print("Detected lgpio library (Raspberry Pi 5 mode)")
 except ImportError:
     try:
         import RPi.GPIO as GPIO
         USING_LGPIO = False
+        print("Detected RPi.GPIO library (Pi 3/4 mode)")
     except ImportError:
-        print("Error: Neither lgpio nor RPi.GPIO found.")
+        print("Error: Neither lgpio nor RPi.GPIO found. Please install one.")
         sys.exit(1)
 
 # --- Configuration ---
@@ -26,12 +30,12 @@ CYCLE_ON_MIN = 5
 CYCLE_OFF_MIN = 5
 TOTAL_CYCLES = 4
 
-# Global variables
-h_chip = None
+# Global State
 pump_active = False
 stop_requested = False
 current_cycle = 0
 phase = "IDLE"
+animation_objects = []
 
 def get_seasonal_schedule():
     month = datetime.datetime.now().month
@@ -59,7 +63,6 @@ def setup_gpio():
             lgpio.gpio_claim_output(h_chip, PUMP_2_PIN)
             lgpio.gpio_write(h_chip, PUMP_1_PIN, 0)
             lgpio.gpio_write(h_chip, PUMP_2_PIN, 0)
-            print(f"Detected lgpio library (Raspberry Pi 5 mode)")
         except Exception as e:
             print(f"Critical LGPIO Error: {e}")
             sys.exit(1)
@@ -69,7 +72,6 @@ def setup_gpio():
         GPIO.setup(PUMP_2_PIN, GPIO.OUT)
         GPIO.output(PUMP_1_PIN, GPIO.LOW)
         GPIO.output(PUMP_2_PIN, GPIO.LOW)
-        print("Detected RPi.GPIO library (Pi 3/4 mode)")
 
 def set_pumps(state):
     global pump_active
@@ -91,25 +93,27 @@ def cleanup_gpio():
                 lgpio.gpiochip_close(h_chip)
         except Exception as e:
             if "unknown handle" not in str(e).lower():
-                print(f"Warning during lgpio cleanup: {e}")
+                print(f"Cleanup Warning: {e}")
     else:
         GPIO.cleanup()
 
-# --- GUI Logic ---
+# --- GUI Application ---
 class GardenApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Smart Garden Controller - Pi 5")
-        self.root.geometry("800x480")
+        self.root.geometry("800x600")
         self.root.configure(bg="#f0f8ff")
         
         # Header
-        header = tk.Frame(root, bg="#2E8B57", height=60)
+        header = tk.Frame(root, bg="#2E8B57", height=70)
         header.pack(fill=tk.X)
-        tk.Label(header, text="🍅 Smart Tomato Garden", font=("Arial", 22, "bold"), bg="#2E8B57", fg="white").pack(pady=10)
+        header.pack_propagate(False)
+        tk.Label(header, text="🍅 Automatic Tomato Garden", font=("Arial", 22, "bold"), 
+                 bg="#2E8B57", fg="white").pack(pady=15)
         
-        # Status Frame
-        status_frame = tk.Frame(root, bg="white", pady=15)
+        # Status Panel
+        status_frame = tk.Frame(root, bg="white", pady=15, relief=tk.RAISED, bd=2)
         status_frame.pack(fill=tk.X, padx=20, pady=10)
         
         self.lbl_status = tk.Label(status_frame, text="Status: IDLE", font=("Arial", 16, "bold"), bg="white", fg="#333")
@@ -122,107 +126,103 @@ class GardenApp:
         self.lbl_cycle.pack()
         
         # Animation Canvas
-        self.canvas = tk.Canvas(root, width=800, height=220, bg="#87CEEB", highlightthickness=0)
-        self.canvas.pack(pady=5)
+        self.canvas_frame = tk.Frame(root, bg="#e0f7fa", relief=tk.SUNKEN, bd=2)
+        self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
-        # Draw static background elements once
-        self.draw_background()
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#e0f7fa", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # Animation variables
+        # FIX: Force window to update layout so canvas has correct size before drawing
+        self.root.update_idletasks() 
+        
         self.drops = []
-        self.animating = False
+        self.tomato_plants = []
+        self.soil_rect = None
+        
+        # Draw initial scene (Idle state)
+        self.draw_scene(False)
         
         # Controls
         ctrl_frame = tk.Frame(root, bg="#f0f8ff")
-        ctrl_frame.pack(pady=15)
+        ctrl_frame.pack(pady=20)
         
-        btn_style = {"font": ("Arial", 12, "bold"), "width": 14, "height": 2, "relief": tk.RAISED}
+        btn_style = {"font": ("Arial", 12, "bold"), "width": 14, "height": 2, "fg": "white"}
         
-        tk.Button(ctrl_frame, text="START AUTO", command=self.start_auto, bg="#4CAF50", fg="white", **btn_style).grid(row=0, column=0, padx=10)
-        tk.Button(ctrl_frame, text="STOP", command=self.stop_system, bg="#f44336", fg="white", **btn_style).grid(row=0, column=1, padx=10)
-        tk.Button(ctrl_frame, text="MANUAL ON", command=lambda: set_pumps(True), bg="#2196F3", fg="white", **btn_style).grid(row=0, column=2, padx=10)
-        tk.Button(ctrl_frame, text="MANUAL OFF", command=lambda: set_pumps(False), bg="#9E9E9E", fg="white", **btn_style).grid(row=0, column=3, padx=10)
+        tk.Button(ctrl_frame, text="START AUTO", command=self.start_auto, bg="#4CAF50", **btn_style).grid(row=0, column=0, padx=10)
+        tk.Button(ctrl_frame, text="STOP", command=self.stop_system, bg="#f44336", **btn_style).grid(row=0, column=1, padx=10)
+        tk.Button(ctrl_frame, text="MANUAL ON", command=lambda: set_pumps(True), bg="#2196F3", **btn_style).grid(row=0, column=2, padx=10)
+        tk.Button(ctrl_frame, text="MANUAL OFF", command=lambda: set_pumps(False), bg="#9E9E9E", **btn_style).grid(row=0, column=3, padx=10)
         
-        # Info
-        self.lbl_info = tk.Label(root, text=f"Season: Every {get_seasonal_schedule()} days | Next: {calculate_next_run()}", font=("Arial", 10), bg="#f0f8ff", fg="#555")
-        self.lbl_info.pack(side=tk.BOTTOM, pady=10)
+        # Footer Info
+        info_lbl = tk.Label(root, text=f"Season: Every {get_seasonal_schedule()} days | Next: {calculate_next_run()}", 
+                          font=("Arial", 10), bg="#f0f8ff", fg="#555")
+        info_lbl.pack(side=tk.BOTTOM, pady=5)
         
         self.running = False
-        
-    def draw_background(self):
+        self.anim_job = None
+
+    def draw_scene(self, watering):
         self.canvas.delete("all")
-        # Sky
-        self.canvas.create_rectangle(0, 0, 800, 220, fill="#87CEEB", outline="")
-        # Sun
-        self.canvas.create_oval(700, 20, 760, 80, fill="#FFD700", outline="#FFA500", width=2)
-        # Ground
-        self.soil_id = self.canvas.create_rectangle(0, 180, 800, 220, fill="#8B4513", outline="")
+        self.drops = []
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        
+        # If size is still invalid, try again later
+        if w < 10 or h < 10: 
+            self.root.after(100, lambda: self.draw_scene(watering))
+            return
+
+        # Draw Soil
+        soil_color = "#5D4037" if watering else "#8D6E63"
+        self.soil_rect = self.canvas.create_rectangle(0, h-40, w, h, fill=soil_color, outline="")
         
         # Draw 3 Tomato Plants
-        positions = [200, 400, 600]
-        for x in positions:
-            self.draw_tomato_plant(x, 180)
+        plant_positions = [w//4, w//2, 3*w//4]
+        ground_y = h - 40
+        
+        for x in plant_positions:
+            # Stake
+            self.canvas.create_line(x, ground_y, x, ground_y-120, fill="#8B4513", width=3)
+            # Leaves
+            self.canvas.create_oval(x-20, ground_y-60, x+20, ground_y-20, fill="#228B22", outline="")
+            self.canvas.create_oval(x-15, ground_y-90, x+15, ground_y-50, fill="#2E8B57", outline="")
+            # Tomatoes (Red circles)
+            self.canvas.create_oval(x-10, ground_y-50, x, ground_y-40, fill="#FF4444", outline="#CC0000")
+            self.canvas.create_oval(x+5, ground_y-70, x+15, ground_y-60, fill="#FF6666", outline="#CC0000")
+            self.canvas.create_oval(x-15, ground_y-80, x-5, ground_y-70, fill="#FF4444", outline="#CC0000")
 
-    def draw_tomato_plant(self, x, y):
-        # Stake
-        self.canvas.create_line(x, y-100, x, y, fill="#8B4513", width=4)
-        self.canvas.create_line(x-2, y-100, x+2, y-100, fill="#8B4513", width=2) # Top bar
-        
-        # Main Stem
-        self.canvas.create_line(x, y, x, y-90, fill="#228B22", width=6)
-        
-        # Leaves
-        self.canvas.create_polygon(x-20, y-60, x-40, y-50, x-20, y-40, fill="#006400", outline="")
-        self.canvas.create_polygon(x+20, y-70, x+45, y-60, x+20, y-50, fill="#006400", outline="")
-        self.canvas.create_polygon(x-15, y-30, x-35, y-20, x-15, y-10, fill="#006400", outline="")
-        self.canvas.create_polygon(x+25, y-40, x+50, y-30, x+25, y-20, fill="#006400", outline="")
-        
-        # Tomatoes (Red and Yellow)
-        self.canvas.create_oval(x-15, y-55, x-5, y-45, fill="#FF4500", outline="#8B0000")
-        self.canvas.create_oval(x+10, y-65, x+20, y-55, fill="#FFD700", outline="#DAA520")
-        self.canvas.create_oval(x-10, y-25, x, y-15, fill="#FF0000", outline="#8B0000")
-        self.canvas.create_oval(x+15, y-35, x+25, y-25, fill="#FF4500", outline="#8B0000")
-
-    def create_drop(self):
-        # Create drops above each plant
-        positions = [200, 400, 600]
-        for x in positions:
-            # Randomize slightly
-            offset = (time.time() * 100) % 50
-            dx = x - 20 + (offset % 40)
-            d = self.canvas.create_oval(dx, -10, dx+4, -6, fill="#00BFFF", outline="")
-            self.drops.append({'id': d, 'x': dx, 'y': -10, 'speed': 3 + (hash(str(dx)) % 3)})
+        # Create 150 Large Water Drops (only if watering)
+        if watering:
+            for i in range(150):
+                dx = (i * (w // 150)) % w
+                dy = (i * 37) % h # Staggered start
+                speed = 5 + (i % 5) # Varied speed
+                drop = self.canvas.create_line(dx, dy, dx, dy+18, fill="#00BFFF", width=4, capstyle=tk.ROUND)
+                self.drops.append({'id': drop, 'x': dx, 'y': dy, 'speed': speed})
 
     def animate_water(self):
-        if not self.animating:
+        if not pump_active:
             return
             
-        # Move drops
-        for drop in self.drops[:]:
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        
+        # Update Soil Color dynamically
+        if self.soil_rect:
+            self.canvas.itemconfig(self.soil_rect, fill="#5D4037")
+
+        for drop in self.drops:
             self.canvas.move(drop['id'], 0, drop['speed'])
             drop['y'] += drop['speed']
             
-            # Reset if hits ground (y > 180)
-            if drop['y'] > 180:
-                self.canvas.coords(drop['id'], drop['x'], -10, drop['x']+4, -6)
-                drop['y'] = -10
+            # Reset drop if it hits bottom
+            if drop['y'] > h:
+                drop['y'] = -20
+                self.canvas.coords(drop['id'], drop['x'], drop['y'], drop['x'], drop['y']+18)
         
-        # Schedule next frame
-        self.root.after(30, self.animate_water)
-
-    def start_watering_animation(self):
-        if not self.animating:
-            self.animating = True
-            self.drops = []
-            self.create_drop()
-            self.animate_water()
-            # Change soil color to wet
-            self.canvas.itemconfig(self.soil_id, fill="#5D4037")
-
-    def stop_watering_animation(self):
-        self.animating = False
-        self.canvas.delete("all")
-        self.draw_background()
+        # Schedule next frame (approx 30 FPS)
+        if pump_active:
+            self.anim_job = self.root.after(33, self.animate_water)
 
     def start_auto(self):
         global stop_requested, current_cycle, phase
@@ -230,13 +230,16 @@ class GardenApp:
         current_cycle = 0
         phase = "STARTING"
         self.running = True
+        self.lbl_status.config(text="Status: STARTING...", fg="blue")
         self.run_cycle_loop()
 
     def stop_system(self):
         global stop_requested
         stop_requested = True
         set_pumps(False)
-        self.stop_watering_animation()
+        if self.anim_job:
+            self.root.after_cancel(self.anim_job)
+        self.draw_scene(False)
         self.lbl_status.config(text="Status: STOPPED BY USER", fg="red")
 
     def run_cycle_loop(self):
@@ -244,15 +247,18 @@ class GardenApp:
         if stop_requested or current_cycle >= TOTAL_CYCLES:
             self.running = False
             phase = "IDLE"
-            self.stop_watering_animation()
+            set_pumps(False)
             msg = "Status: CYCLE COMPLETE" if not stop_requested else "Status: STOPPED"
             self.lbl_status.config(text=msg, fg="green")
+            self.draw_scene(False)
             return
 
+        # Watering Phase
         phase = "WATERING"
         self.lbl_status.config(text=f"Status: WATERING (Cycle {current_cycle+1}/{TOTAL_CYCLES})", fg="blue")
+        self.draw_scene(True)
         set_pumps(True)
-        self.start_watering_animation()
+        self.animate_water()
         
         duration_ms = CYCLE_ON_MIN * 60 * 1000
         self.root.after(duration_ms, self.wait_phase)
@@ -262,9 +268,11 @@ class GardenApp:
         if stop_requested: return
         
         set_pumps(False)
-        self.stop_watering_animation()
+        if self.anim_job: self.root.after_cancel(self.anim_job)
+        
         phase = "WAITING"
         self.lbl_status.config(text="Status: WAITING...", fg="orange")
+        self.draw_scene(False)
         
         duration_ms = CYCLE_OFF_MIN * 60 * 1000
         self.root.after(duration_ms, self.next_cycle)
