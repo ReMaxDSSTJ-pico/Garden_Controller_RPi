@@ -1,11 +1,15 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/env python3
 import tkinter as tk
+from tkinter import ttk
 import datetime
 import time
-import sys
 import os
+import sys
+import math
+import random
 
-# --- GPIO Library Detection ---
+# --- GPIO Library Detection (Pi 5 vs Pi 3/4) ---
 USING_LGPIO = False
 h_chip = None
 
@@ -19,32 +23,24 @@ except ImportError:
         USING_LGPIO = False
         print("Detected RPi.GPIO library (Pi 3/4 mode)")
     except ImportError:
-        print("Warning: No GPIO library found. Running in Simulation Mode.")
-        USING_LGPIO = None # Simulation mode
+        print("Error: Neither lgpio nor RPi.GPIO found. Please install one.")
+        sys.exit(1)
 
 # --- Configuration ---
-# Relay Pins (BCM)
-RELAY_PINS = [17, 27, 22, 23] # Zone 1, 2, 3, 4
-
-# Default Times (Seconds)
-# Zone 1: 1m ON, 5m OFF
-# Zone 2: 2m ON, 3m OFF
-# Zone 3: 3m ON, 2m OFF
-# Zone 4: 4m ON, 1m OFF
-DEFAULT_ON_TIMES = [60, 120, 180, 240] 
-FIXED_OFF_TIMES = [300, 180, 120, 60] 
+RELAY_PINS = [17, 27, 22, 23]  # GPIO pins for Relays 1-4
+DEFAULT_ON_TIMES = [60, 120, 180, 240]  # Default ON times in seconds (1, 2, 3, 4 min)
+OFF_TIMES = [300, 180, 120, 60]  # Fixed OFF times in seconds (5, 3, 2, 1 min)
+NUM_ZONES = 4
 
 # Global State
-zone_active = [False, False, False, False]
 stop_requested = False
-current_cycle = 0
-TOTAL_CYCLES = 4
-zone_timers = [] # Stores the 'after' job IDs for turning off individual zones
+zone_timers = []  # List of timer objects
+zone_active = [False] * NUM_ZONES
+zone_on_times = DEFAULT_ON_TIMES.copy()
 
-# --- GPIO Functions ---
 def setup_gpio():
     global h_chip
-    if USING_LGPIO is True:
+    if USING_LGPIO:
         try:
             h_chip = lgpio.gpiochip_open(0)
             for pin in RELAY_PINS:
@@ -52,52 +48,50 @@ def setup_gpio():
                 lgpio.gpio_write(h_chip, pin, 0)
         except Exception as e:
             print(f"Critical LGPIO Error: {e}")
-    elif USING_LGPIO is False:
+            sys.exit(1)
+    else:
         GPIO.setmode(GPIO.BCM)
         for pin in RELAY_PINS:
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.LOW)
 
 def set_relay(zone_idx, state):
-    """State: True=ON, False=OFF"""
     pin = RELAY_PINS[zone_idx]
     val = 1 if state else 0
-    
-    if USING_LGPIO is True:
+    if USING_LGPIO:
         lgpio.gpio_write(h_chip, pin, val)
-    elif USING_LGPIO is False:
+    else:
         GPIO.output(pin, val)
-    
     zone_active[zone_idx] = state
 
 def cleanup_gpio():
     global h_chip
-    for i in range(4):
+    for i in range(NUM_ZONES):
         set_relay(i, False)
-    if USING_LGPIO is True:
+    if USING_LGPIO:
         try:
             if h_chip is not None:
                 lgpio.gpiochip_close(h_chip)
         except Exception as e:
             if "unknown handle" not in str(e).lower():
                 print(f"Cleanup Warning: {e}")
-    elif USING_LGPIO is False:
+    else:
         GPIO.cleanup()
 
 # --- GUI Application ---
 class GardenApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Smart Tomato Garden - 4 Zones")
+        self.root.title("Smart Tomato Garden Controller")
         self.root.geometry("800x700")
         self.root.configure(bg="#f0f8ff")
         
         # Header
-        header = tk.Frame(root, bg="#2E8B57", height=70)
+        header = tk.Frame(root, bg="#2E8B57", height=60)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="🍅 Automatic Tomato Garden Controller", font=("Arial", 20, "bold"), 
-                 bg="#2E8B57", fg="white").pack(pady=15)
+        tk.Label(header, text="\U0001F345 Pixel Art Tomato Garden", font=("Arial", 20, "bold"), 
+                 bg="#2E8B57", fg="white").pack(pady=10)
         
         # Status Panel
         status_frame = tk.Frame(root, bg="white", pady=10, relief=tk.RAISED, bd=2)
@@ -109,259 +103,235 @@ class GardenApp:
         self.lbl_timer = tk.Label(status_frame, text="Time: --:--:--", font=("Arial", 14), bg="white", fg="#666")
         self.lbl_timer.pack()
         
-        self.lbl_cycle = tk.Label(status_frame, text="Cycle: 0 / 4", font=("Arial", 14), bg="white", fg="#666")
-        self.lbl_cycle.pack()
-        
-        # Animation Canvas (Half height of window approx)
+        # Animation Canvas
         self.canvas_frame = tk.Frame(root, bg="#e0f7fa", relief=tk.SUNKEN, bd=2)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
         
         self.canvas = tk.Canvas(self.canvas_frame, bg="#e0f7fa", highlightthickness=0, width=800, height=250)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # Zone Data Structures
-        self.zone_drops = [[], [], [], []] # Drops per zone
-        self.zone_rects = [] # To store background rects if needed
+        self.zone_drops = [[] for _ in range(NUM_ZONES)]
+        self.zone_plant_ids = [[] for _ in range(NUM_ZONES)]
         
-        # Draw Initial Scene
-        self.draw_scene()
+        # Draw initial scene
+        self.draw_background()
+        self.draw_all_plants()
         
-        # Controls Frame
+        # Controls
         ctrl_frame = tk.Frame(root, bg="#f0f8ff")
         ctrl_frame.pack(pady=10)
         
-        btn_style = {"font": ("Arial", 12, "bold"), "width": 12, "height": 1, "fg": "white"}
+        btn_style = {"font": ("Arial", 11, "bold"), "width": 12, "height": 1, "fg": "white"}
         
-        tk.Button(ctrl_frame, text="START AUTO", command=self.start_auto, bg="#4CAF50", **btn_style).grid(row=0, column=0, padx=10, pady=5)
-        tk.Button(ctrl_frame, text="STOP", command=self.stop_system, bg="#f44336", **btn_style).grid(row=0, column=1, padx=10, pady=5)
-        tk.Button(ctrl_frame, text="MANUAL ALL ON", command=self.manual_all_on, bg="#2196F3", **btn_style).grid(row=0, column=2, padx=10, pady=5)
-        tk.Button(ctrl_frame, text="MANUAL ALL OFF", command=self.manual_all_off, bg="#9E9E9E", **btn_style).grid(row=0, column=3, padx=10, pady=5)
+        tk.Button(ctrl_frame, text="START ALL", command=self.start_all, bg="#4CAF50", **btn_style).grid(row=0, column=0, padx=5)
+        tk.Button(ctrl_frame, text="STOP", command=self.stop_system, bg="#f44336", **btn_style).grid(row=0, column=1, padx=5)
         
-        # Zone Timing Controls
-        timing_frame = tk.Frame(root, bg="white", relief=tk.RAISED, bd=2)
-        timing_frame.pack(fill=tk.X, padx=20, pady=10)
+        # Zone Control Panels
+        zones_frame = tk.Frame(root, bg="#f0f8ff")
+        zones_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(timing_frame, text="Zone ON Time Adjustment (Seconds)", font=("Arial", 12, "bold"), bg="white").pack(pady=5)
-        
+        self.zone_leds = []
         self.time_labels = []
-        zone_container = tk.Frame(timing_frame, bg="white")
-        zone_container.pack()
         
-        for i in range(4):
-            frame = tk.Frame(zone_container, bg="#eee", bd=1, relief=tk.GROOVE)
-            frame.grid(row=0, column=i, padx=10, pady=5)
+        for i in range(NUM_ZONES):
+            z_frame = tk.Frame(zones_frame, bg="white", relief=tk.RIDGE, bd=2, padx=10, pady=5)
+            z_frame.grid(row=0, column=i, sticky="nsew", padx=5)
+            zones_frame.grid_columnconfigure(i, weight=1)
             
-            lbl = tk.Label(frame, text=f"Zone {i+1}\n{DEFAULT_ON_TIMES[i]}s", font=("Arial", 10), bg="#eee", width=8)
-            lbl.pack(pady=5)
-            self.time_labels.append(lbl)
+            tk.Label(z_frame, text=f"Zone {i+1}", font=("Arial", 12, "bold"), bg="white").pack()
             
-            btn_minus = tk.Button(frame, text="-", command=lambda idx=i: self.adjust_time(idx, -10), width=3)
-            btn_minus.pack(side=tk.LEFT)
+            led = tk.Label(z_frame, text="●", font=("Arial", 16), bg="white", fg="#ccc")
+            led.pack()
+            self.zone_leds.append(led)
             
-            btn_plus = tk.Button(frame, text="+", command=lambda idx=i: self.adjust_time(idx, 10), width=3)
-            btn_plus.pack(side=tk.RIGHT)
+            time_lbl = tk.Label(z_frame, text=f"{zone_on_times[i]}s ON", font=("Arial", 10), bg="white")
+            time_lbl.pack()
+            self.time_labels.append(time_lbl)
             
+            btn_frame = tk.Frame(z_frame, bg="white")
+            btn_frame.pack()
+            
+            tk.Button(btn_frame, text="-", command=lambda idx=i: self.adjust_time(idx, -10), width=3, bg="#FF9800", fg="white").grid(row=0, column=0, padx=2)
+            tk.Button(btn_frame, text="+", command=lambda idx=i: self.adjust_time(idx, 10), width=3, bg="#2196F3", fg="white").grid(row=0, column=1, padx=2)
+            
+            info = tk.Label(z_frame, text=f"Off: {OFF_TIMES[i]}s", font=("Arial", 9), bg="white", fg="#666")
+            info.pack()
+
         # Footer
-        info_lbl = tk.Label(root, text="Seasonal Calendar Active | Next Run: 19:00", font=("Arial", 9), bg="#f0f8ff", fg="#555")
+        info_lbl = tk.Label(root, text="Relays start together, stop individually based on time.", font=("Arial", 9), bg="#f0f8ff", fg="#555")
         info_lbl.pack(side=tk.BOTTOM, pady=5)
         
         self.running = False
-        self.anim_jobs = [] # Store animation job IDs
+        self.anim_job = None
 
-    def adjust_time(self, idx, change):
-        new_time = DEFAULT_ON_TIMES[idx] + change
-        if 10 <= new_time <= 600: # Limit 10s to 10min
-            DEFAULT_ON_TIMES[idx] = new_time
-            off_str = f"{FIXED_OFF_TIMES[idx]}s OFF"
-            self.time_labels[idx].config(text=f"Zone {idx+1}\n{new_time}s\n{off_str}")
-
-    def draw_scene(self):
-        """Draws the static background and plants using native Tkinter"""
-        self.canvas.delete("all")
-        w = 800
-        h = 250
+    def draw_background(self):
+        self.canvas.delete("bg")
+        w, h = 800, 250
         
-        # 1. Sky Gradient (Simulated with rectangles)
-        for y in range(0, h, 20):
-            factor = y / float(h)
-            r = int(63 * (1 - factor) + 121 * factor)
-            g = int(142 * (1 - factor) + 195 * factor)
-            b = int(226 * (1 - factor) + 252 * factor)
+        # Sky Gradient
+        for y in range(0, 180, 4):
+            factor = y / 180.0
+            r = int(63 * (1-factor) + 121 * factor)
+            g = int(142 * (1-factor) + 195 * factor)
+            b = int(226 * (1-factor) + 252 * factor)
             color = f"#{r:02x}{g:02x}{b:02x}"
-            self.canvas.create_rectangle(0, y, w, y+20, fill=color, outline="")
+            self.canvas.create_rectangle(0, y, w, y+4, fill=color, outline="", tags="bg")
             
-        # 2. Ground & Soil
-        ground_y = 210
-        self.canvas.create_rectangle(0, ground_y, w, h, fill="#4f3228", outline="") # Deep soil
-        self.canvas.create_rectangle(0, ground_y, w, ground_y+10, fill="#36211b", outline="") # Topsoil
+        # Ground
+        self.canvas.create_rectangle(0, 180, w, h, fill="#5D4037", outline="", tags="bg")
+        self.canvas.create_rectangle(0, 180, w, 185, fill="#795548", outline="", tags="bg")
         
-        # 3. Grass Tufts
-        for x in range(0, w, 10):
-            if x % 6 == 0:
-                self.canvas.create_line(x, ground_y, x, ground_y-5, fill="#66b834", width=2)
-            elif x % 4 == 0:
-                self.canvas.create_line(x, ground_y, x, ground_y-8, fill="#3b7524", width=2)
-                
-        # 4. Clouds (Pixel style)
-        cloud_coords = [(50, 30), (200, 50), (400, 20), (600, 40)]
-        for cx, cy in cloud_coords:
-            self.canvas.create_rectangle(cx, cy, cx+40, cy+15, fill="white", outline="")
-            self.canvas.create_rectangle(cx+10, cy-10, cx+30, cy+15, fill="white", outline="")
+        # Grass tufts
+        for x in range(0, w, 15):
+            offset = random.randint(-2, 2)
+            self.canvas.create_line(x, 180, x-3+offset, 170, fill="#4CAF50", width=2, tags="bg")
+            self.canvas.create_line(x+5, 180, x+2+offset, 168, fill="#388E3C", width=2, tags="bg")
 
-        # 5. Draw 4 Distinct Tomato Plants (One per Zone)
-        # Zone layout: 4 panels of 200px width each
-        panel_w = 200
+    def draw_pixel_art_plant(self, center_x, ground_y, stage):
+        """Draws realistic pixel-art style plants for 4 stages"""
+        items = []
+        soil_y = ground_y
         
-        for i in range(4):
-            cx = (i * panel_w) + (panel_w // 2)
-            base_y = ground_y
+        if stage == 1: # Sprout
+            # Stem
+            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-15, fill="#2E7D32", width=2))
+            # Two small leaves
+            items.append(self.canvas.create_oval(center_x-8, soil_y-12, center_x-2, soil_y-6, fill="#4CAF50", outline=""))
+            items.append(self.canvas.create_oval(center_x+2, soil_y-12, center_x+8, soil_y-6, fill="#66BB6A", outline=""))
             
-            # Zone Background Highlight (Subtle)
-            self.canvas.create_rectangle(i*panel_w, 0, (i+1)*panel_w, h, fill="", outline="#ddd", dash=(2,2))
+        elif stage == 2: # Young Plant
+            # Main stem
+            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-25, fill="#1B5E20", width=3))
+            # Lower leaves
+            items.append(self.canvas.create_polygon(center_x-15, soil_y-10, center_x-5, soil_y-15, center_x-10, soil_y-5, fill="#388E3C", outline=""))
+            items.append(self.canvas.create_polygon(center_x+15, soil_y-10, center_x+5, soil_y-15, center_x+10, soil_y-5, fill="#4CAF50", outline=""))
+            # Upper leaves
+            items.append(self.canvas.create_polygon(center_x-12, soil_y-20, center_x-2, soil_y-25, center_x-8, soil_y-15, fill="#2E7D32", outline=""))
+            items.append(self.canvas.create_polygon(center_x+12, soil_y-20, center_x+2, soil_y-25, center_x+8, soil_y-15, fill="#388E3C", outline=""))
             
-            # Plant Logic based on Growth Stage
-            if i == 0: # Sprout
-                self.canvas.create_line(cx, base_y, cx, base_y-20, fill="#215522", width=3)
-                self.canvas.create_oval(cx-10, base_y-25, cx+10, base_y-10, fill="#429131", outline="")
-            elif i == 1: # Young Plant
-                self.canvas.create_line(cx, base_y, cx, base_y-40, fill="#215522", width=4)
-                self.canvas.create_oval(cx-20, base_y-45, cx+20, base_y-20, fill="#429131", outline="")
-                self.canvas.create_oval(cx-15, base_y-25, cx+15, base_y-5, fill="#76bf4a", outline="")
-            elif i == 2: # Flowering
-                self.canvas.create_line(cx, base_y, cx, base_y-60, fill="#215522", width=5)
-                self.canvas.create_oval(cx-30, base_y-65, cx+30, base_y-30, fill="#419131", outline="")
-                # Flowers
-                self.canvas.create_oval(cx-20, base_y-50, cx-10, base_y-40, fill="#f7db3b", outline="")
-                self.canvas.create_oval(cx+10, base_y-45, cx+20, base_y-35, fill="#f7db3b", outline="")
-                # Green tomato
-                self.canvas.create_oval(cx-5, base_y-35, cx+5, base_y-25, fill="#709636", outline="")
-            elif i == 3: # Mature
-                self.canvas.create_line(cx, base_y, cx, base_y-80, fill="#215522", width=6)
-                self.canvas.create_oval(cx-40, base_y-85, cx+40, base_y-40, fill="#215522", outline="") # Shadow
-                self.canvas.create_oval(cx-35, base_y-80, cx+35, base_y-35, fill="#429131", outline="")
-                # Red Tomatoes
-                self.canvas.create_oval(cx-25, base_y-50, cx-10, base_y-35, fill="#e0392c", outline="#9c1f29")
-                self.canvas.create_oval(cx+10, base_y-45, cx+25, base_y-30, fill="#e0392c", outline="#9c1f29")
-                self.canvas.create_oval(cx-5, base_y-65, cx+10, base_y-50, fill="#e0392c", outline="#9c1f29")
-                # Highlight
-                self.canvas.create_oval(cx-20, base_y-48, cx-15, base_y-43, fill="white", outline="")
+        elif stage == 3: # Flowering
+            # Bushy stem
+            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-35, fill="#1B5E20", width=4))
+            # Large foliage clusters
+            items.append(self.canvas.create_oval(center_x-20, soil_y-10, center_x-5, soil_y+5, fill="#2E7D32", outline=""))
+            items.append(self.canvas.create_oval(center_x+5, soil_y-10, center_x+20, soil_y+5, fill="#388E3C", outline=""))
+            items.append(self.canvas.create_oval(center_x-15, soil_y-25, center_x, soil_y-10, fill="#4CAF50", outline=""))
+            items.append(self.canvas.create_oval(center_x, soil_y-25, center_x+15, soil_y-10, fill="#66BB6A", outline=""))
+            # Yellow Flowers
+            items.append(self.canvas.create_oval(center_x-8, soil_y-18, center_x-2, soil_y-12, fill="#FFEB3B", outline="#FBC02D"))
+            items.append(self.canvas.create_oval(center_x+2, soil_y-22, center_x+8, soil_y-16, fill="#FFEB3B", outline="#FBC02D"))
+            # Small green tomatoes
+            items.append(self.canvas.create_oval(center_x-5, soil_y-5, center_x+2, soil_y+2, fill="#8BC34A", outline=""))
+            
+        elif stage == 4: # Mature Fruit
+            # Thick main stem
+            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-45, fill="#004D40", width=5))
+            # Dense foliage
+            items.append(self.canvas.create_oval(center_x-25, soil_y-5, center_x-10, soil_y+10, fill="#1B5E20", outline=""))
+            items.append(self.canvas.create_oval(center_x+10, soil_y-5, center_x+25, soil_y+10, fill="#2E7D32", outline=""))
+            items.append(self.canvas.create_oval(center_x-20, soil_y-30, center_x-5, soil_y-15, fill="#388E3C", outline=""))
+            items.append(self.canvas.create_oval(center_x+5, soil_y-30, center_x+20, soil_y-15, fill="#4CAF50", outline=""))
+            items.append(self.canvas.create_oval(center_x-10, soil_y-45, center_x+10, soil_y-30, fill="#2E7D32", outline=""))
+            # Large Red Tomatoes
+            items.append(self.canvas.create_oval(center_x-12, soil_y-8, center_x-2, soil_y+4, fill="#D32F2F", outline="#B71C1C"))
+            items.append(self.canvas.create_oval(center_x+2, soil_y-12, center_x+12, soil_y, fill="#F44336", outline="#D32F2F"))
+            items.append(self.canvas.create_oval(center_x-8, soil_y-20, center_x+2, soil_y-10, fill="#D32F2F", outline="#B71C1C"))
+            # Highlight on tomato
+            items.append(self.canvas.create_oval(center_x-10, soil_y-6, center_x-6, soil_y-2, fill="#FFCDD2", outline=""))
+            
+        return items
 
-    def create_drops(self, zone_idx):
-        """Create 10 drops for a specific zone"""
-        panel_w = 200
-        start_x = zone_idx * panel_w
-        center_x = start_x + (panel_w // 2)
-        
-        drops = []
-        for i in range(10):
-            dx = center_x - 40 + (i * 8) # Spread across plant
-            dy = 10 + (i * 15) # Staggered start
-            speed = 3 + (i % 3)
-            # Create line object
-            drop_id = self.canvas.create_line(dx, dy, dx, dy+12, fill="#00BFFF", width=3, capstyle=tk.ROUND)
-            drops.append({'id': drop_id, 'x': dx, 'y': dy, 'speed': speed})
-        
-        self.zone_drops[zone_idx] = drops
+    def draw_all_plants(self):
+        self.canvas.delete("plant")
+        self.canvas.delete("drops")
+        for i in range(NUM_ZONES):
+            self.zone_plant_ids[i] = []
+            self.zone_drops[i] = []
+            
+            # Calculate position for 4 zones
+            panel_width = 800 // NUM_ZONES
+            center_x = (panel_width * i) + (panel_width // 2)
+            ground_y = 180
+            
+            # Draw Plant
+            plant_items = self.draw_pixel_art_plant(center_x, ground_y, i+1)
+            self.zone_plant_ids[i].extend(plant_items)
+            
+            # Create 10 Water Drops (Hidden initially)
+            for j in range(10):
+                dx = center_x - 20 + (j * 4)
+                dy = -20 - (j * 10)
+                drop = self.canvas.create_line(dx, dy, dx, dy+12, fill="#00BFFF", width=3, capstyle=tk.ROUND, state='hidden')
+                self.zone_drops[i].append({'id': drop, 'x': dx, 'y': dy, 'speed': 4 + (j % 3)})
 
     def animate_zone(self, zone_idx):
-        """Animate drops for a specific zone only if active"""
         if not zone_active[zone_idx]:
+            self.canvas.itemconfig("drops", state='hidden') # Hide all if stopped
             return
 
-        h = 250
-        drops = self.zone_drops[zone_idx]
-        
-        for drop in drops:
-            self.canvas.move(drop['id'], 0, drop['speed'])
-            drop['y'] += drop['speed']
+        # Show drops for this zone
+        for drop_data in self.zone_drops[zone_idx]:
+            self.canvas.itemconfig(drop_data['id'], state='normal')
+            self.canvas.move(drop_data['id'], 0, drop_data['speed'])
+            drop_data['y'] += drop_data['speed']
             
-            if drop['y'] > h:
-                drop['y'] = 10 # Reset to top
-                self.canvas.coords(drop['id'], drop['x'], drop['y'], drop['x'], drop['y']+12)
+            # Reset if hits ground (approx y=180)
+            if drop_data['y'] > 180:
+                drop_data['y'] = -20 - (random.randint(0, 20))
+                center_x = (800 // NUM_ZONES) * zone_idx + (800 // NUM_ZONES // 2)
+                drop_data['x'] = center_x - 20 + (random.randint(0, 80))
+                self.canvas.coords(drop_data['id'], drop_data['x'], drop_data['y'], drop_data['x'], drop_data['y']+12)
         
-        # Schedule next frame
         if zone_active[zone_idx]:
-            job = self.root.after(50, lambda: self.animate_zone(zone_idx))
-            # We don't store job ID globally to avoid complexity, 
-            # the loop breaks naturally when zone_active becomes False
+            self.root.after(50, lambda: self.animate_zone(zone_idx))
 
-    def start_auto(self):
-        global stop_requested, current_cycle
+    def update_led(self, idx, state):
+        color = "#00FF00" if state else "#cccccc"
+        self.zone_leds[idx].config(fg=color)
+
+    def adjust_time(self, idx, delta):
+        new_time = zone_on_times[idx] + delta
+        if 10 <= new_time <= 600: # 10s to 10min
+            zone_on_times[idx] = new_time
+            self.time_labels[idx].config(text=f"{new_time}s ON")
+
+    def start_all(self):
+        global stop_requested
         stop_requested = False
-        current_cycle = 0
-        self.running = True
-        self.lbl_status.config(text="Status: STARTING CYCLE...", fg="blue")
-        self.run_cycle_loop()
+        self.lbl_status.config(text="Status: WATERING ALL ZONES", fg="blue")
+        
+        # Start all relays
+        for i in range(NUM_ZONES):
+            set_relay(i, True)
+            self.update_led(i, True)
+            self.animate_zone(i)
+        
+        # Schedule individual turn-offs
+        for i in range(NUM_ZONES):
+            delay_ms = zone_on_times[i] * 1000
+            self.root.after(delay_ms, lambda idx=i: self.stop_zone(idx))
+
+    def stop_zone(self, idx):
+        if stop_requested: return
+        set_relay(idx, False)
+        self.update_led(idx, False)
+        # Hide drops for this zone
+        for drop_data in self.zone_drops[idx]:
+            self.canvas.itemconfig(drop_data['id'], state='hidden')
+        
+        # Check if all stopped
+        if not any(zone_active):
+            self.lbl_status.config(text="Status: CYCLE COMPLETE", fg="green")
 
     def stop_system(self):
         global stop_requested
         stop_requested = True
-        self.running = False
-        
-        # Turn off all relays immediately
-        for i in range(4):
+        for i in range(NUM_ZONES):
             set_relay(i, False)
-        
-        # Clear any pending timers
-        # (In a real app we'd track these, but setting active=False stops animation)
-        
+            self.update_led(i, False)
+            for drop_data in self.zone_drops[i]:
+                self.canvas.itemconfig(drop_data['id'], state='hidden')
         self.lbl_status.config(text="Status: STOPPED BY USER", fg="red")
-        self.draw_scene() # Redraw to clear drops
-
-    def manual_all_on(self):
-        for i in range(4):
-            set_relay(i, True)
-            self.create_drops(i)
-        self.lbl_status.config(text="Status: MANUAL ALL ON", fg="orange")
-
-    def manual_all_off(self):
-        for i in range(4):
-            set_relay(i, False)
-        self.lbl_status.config(text="Status: MANUAL ALL OFF", fg="green")
-        self.draw_scene()
-
-    def run_cycle_loop(self):
-        global current_cycle, stop_requested
-        
-        if stop_requested or current_cycle >= TOTAL_CYCLES:
-            self.running = False
-            self.lbl_status.config(text="Status: CYCLE COMPLETE", fg="green")
-            self.draw_scene()
-            return
-
-        current_cycle += 1
-        self.lbl_cycle.config(text=f"Cycle: {current_cycle} / {TOTAL_CYCLES}")
-        self.lbl_status.config(text=f"Status: WATERING ZONES...", fg="blue")
-        
-        # Start ALL zones simultaneously
-        for i in range(4):
-            set_relay(i, True)
-            self.create_drops(i) # Init drops
-            self.animate_zone(i) # Start animation
-            
-            # Schedule individual turn-off
-            on_time_ms = DEFAULT_ON_TIMES[i] * 1000
-            self.root.after(on_time_ms, lambda idx=i: self.turn_off_zone(idx))
-
-    def turn_off_zone(self, zone_idx):
-        if stop_requested: return
-        set_relay(zone_idx, False)
-        # Animation stops automatically because zone_active[zone_idx] is now False
-        # Visual cleanup happens on next full cycle or stop
-        
-        # Check if all are done to start waiting period? 
-        # For simplicity, we wait for the longest zone then restart loop logic
-        # But requirement says "individual off". 
-        # We need a mechanism to know when ALL are off to start the "OFF" phase of the cycle.
-        
-        # Simple approach: Wait for the MAX time of this cycle, then restart loop
-        # But since they turn off individually, the "Cycle" effectively ends when the last one turns off.
-        # Let's check if all are false after a delay matching the max time.
-        
-        max_time = max(DEFAULT_ON_TIMES)
-        # We schedule the "Next Cycle" check slightly after the longest possible zone
-        # Note: This is a simplification. A robust system tracks completion of all 4.
-        pass 
 
     def update_clock(self):
         now = datetime.datetime.now().strftime("%H:%M:%S")
