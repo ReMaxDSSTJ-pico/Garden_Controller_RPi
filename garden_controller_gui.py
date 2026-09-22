@@ -32,7 +32,7 @@ PINS = [17, 27, 22, 23]  # Relay 1, 2, 3, 4
 DEFAULT_ON_TIMES = [60, 120, 180, 240]  # 1m, 2m, 3m, 4m
 
 # Fixed OFF times in seconds
-OFF_TIMES = [300, 180, 120, 60]  # 5m, 3m, 2m, 1m
+OFF_TIMES = [240, 180, 120, 60]  # 5m, 3m, 2m, 1m
 
 # Global State
 relay_states = [False] * 4  # Current physical state of relays
@@ -109,7 +109,7 @@ class GardenApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Smart Garden Controller - 4 Zones")
-        self.root.geometry("800x640")
+        self.root.geometry("800x800")
         self.root.configure(bg="#f0f8ff")
         
         # Header
