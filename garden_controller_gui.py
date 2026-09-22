@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import tkinter as tk
-from tkinter import ttk
 import datetime
-import time
-import os
+import math
 import sys
 
 # --- GPIO Library Detection (Pi 5 vs Pi 3/4) ---
@@ -35,7 +33,6 @@ pump_active = False
 stop_requested = False
 current_cycle = 0
 phase = "IDLE"
-animation_objects = []
 
 def get_seasonal_schedule():
     month = datetime.datetime.now().month
@@ -97,6 +94,42 @@ def cleanup_gpio():
     else:
         GPIO.cleanup()
 
+# --- Celestial Calculation Helpers ---
+def get_moon_phase_name(day, month, year):
+    # Simple approximation for moon phase name
+    c = e = jd = b = 0
+    if month < 3:
+        year -= 1
+        month += 12
+    c = 365.25 * year
+    e = 30.6 * month
+    jd = c + e + day - 694039.09
+    jd /= 29.5305882
+    b = int(jd)
+    jd -= b
+    b = round(jd * 8)
+    
+    phases = ["New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous",
+              "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent"]
+    if b >= 8: b = 0
+    return phases[b]
+
+def get_sun_position(hour, minute):
+    # Calculate sun angle (0° at 6am, 180° at 12pm, 360° at 6pm)
+    # Returns (x_ratio, y_ratio, is_night)
+    time_dec = hour + minute / 60.0
+    
+    if 6.0 <= time_dec <= 18.0:
+        # Daytime
+        progress = (time_dec - 6.0) / 12.0 # 0.0 to 1.0
+        angle = progress * math.pi # 0 to PI
+        x = 0.1 + 0.8 * progress # 10% to 90% width
+        y = 0.1 + 0.4 * math.sin(angle) # Arc height
+        return x, y, False
+    else:
+        # Nightime (Sun below horizon)
+        return -1, -1, True
+
 # --- GUI Application ---
 class GardenApp:
     def __init__(self, root):
@@ -125,21 +158,21 @@ class GardenApp:
         self.lbl_cycle = tk.Label(status_frame, text="Cycle: 0 / 4", font=("Arial", 14), bg="white", fg="#666")
         self.lbl_cycle.pack()
         
+        self.lbl_moon = tk.Label(status_frame, text="", font=("Arial", 10), bg="white", fg="#555")
+        self.lbl_moon.pack()
+        
         # Animation Canvas
-        self.canvas_frame = tk.Frame(root, bg="#e0f7fa", relief=tk.SUNKEN, bd=2)
+        self.canvas_frame = tk.Frame(root, bg="#87CEEB", relief=tk.SUNKEN, bd=2)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
-        self.canvas = tk.Canvas(self.canvas_frame, bg="#e0f7fa", highlightthickness=0)
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#87CEEB", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # FIX: Force window to update layout so canvas has correct size before drawing
-        self.root.update_idletasks() 
-        
         self.drops = []
-        self.tomato_plants = []
-        self.soil_rect = None
+        self.sky_objects = {} # Store sun/moon IDs
         
-        # Draw initial scene (Idle state)
+        # Force layout update before drawing
+        self.root.update_idletasks()
         self.draw_scene(False)
         
         # Controls
@@ -154,27 +187,29 @@ class GardenApp:
         tk.Button(ctrl_frame, text="MANUAL OFF", command=lambda: set_pumps(False), bg="#9E9E9E", **btn_style).grid(row=0, column=3, padx=10)
         
         # Footer Info
-        info_lbl = tk.Label(root, text=f"Season: Every {get_seasonal_schedule()} days | Next: {calculate_next_run()}", 
+        self.info_lbl = tk.Label(root, text=f"Season: Every {get_seasonal_schedule()} days | Next: {calculate_next_run()}", 
                           font=("Arial", 10), bg="#f0f8ff", fg="#555")
-        info_lbl.pack(side=tk.BOTTOM, pady=5)
+        self.info_lbl.pack(side=tk.BOTTOM, pady=5)
         
         self.running = False
         self.anim_job = None
+        
+        # Start celestial update loop
+        self.update_celestial()
 
     def draw_scene(self, watering):
         self.canvas.delete("all")
         self.drops = []
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
-        
-        # If size is still invalid, try again later
-        if w < 10 or h < 10: 
-            self.root.after(100, lambda: self.draw_scene(watering))
-            return
+        if w < 10 or h < 10: return
+
+        # Sky Background (Dynamic handled in update_celestial, default here)
+        self.canvas.configure(bg="#87CEEB")
 
         # Draw Soil
         soil_color = "#5D4037" if watering else "#8D6E63"
-        self.soil_rect = self.canvas.create_rectangle(0, h-40, w, h, fill=soil_color, outline="")
+        self.canvas.create_rectangle(0, h-40, w, h, fill=soil_color, outline="")
         
         # Draw 3 Tomato Plants
         plant_positions = [w//4, w//2, 3*w//4]
@@ -186,41 +221,79 @@ class GardenApp:
             # Leaves
             self.canvas.create_oval(x-20, ground_y-60, x+20, ground_y-20, fill="#228B22", outline="")
             self.canvas.create_oval(x-15, ground_y-90, x+15, ground_y-50, fill="#2E8B57", outline="")
-            # Tomatoes (Red circles)
+            # Tomatoes
             self.canvas.create_oval(x-10, ground_y-50, x, ground_y-40, fill="#FF4444", outline="#CC0000")
             self.canvas.create_oval(x+5, ground_y-70, x+15, ground_y-60, fill="#FF6666", outline="#CC0000")
             self.canvas.create_oval(x-15, ground_y-80, x-5, ground_y-70, fill="#FF4444", outline="#CC0000")
 
-        # Create 50 Large Water Drops (only if watering)
+        # Create 50 Large Water Drops
         if watering:
             for i in range(50):
                 dx = (i * (w // 50)) % w
-                dy = (i * 37) % h # Staggered start
-                speed = 5 + (i % 5) # Varied speed
+                dy = (i * 37) % h
+                speed = 8 + (i % 5)
                 drop = self.canvas.create_line(dx, dy, dx, dy+18, fill="#00BFFF", width=4, capstyle=tk.ROUND)
                 self.drops.append({'id': drop, 'x': dx, 'y': dy, 'speed': speed})
+
+    def update_celestial(self):
+        """Updates Sun/Moon position and sky color based on real time"""
+        now = datetime.datetime.now()
+        h, m = now.hour, now.minute
+        w = self.canvas.winfo_width()
+        h_canvas = self.canvas.winfo_height()
+        
+        if w < 10 or h_canvas < 10:
+            self.root.after(1000, self.update_celestial)
+            return
+
+        # Clear previous sky objects
+        if 'sun' in self.sky_objects: self.canvas.delete(self.sky_objects['sun'])
+        if 'moon' in self.sky_objects: self.canvas.delete(self.sky_objects['moon'])
+        if 'moon_text' in self.sky_objects: self.canvas.delete(self.sky_objects['moon_text'])
+
+        sun_x, sun_y, is_night = get_sun_position(h, m)
+        
+        if not is_night:
+            # Draw Sun
+            cx = int(sun_x * w)
+            cy = int(sun_y * (h_canvas - 50)) # Keep above plants
+            self.sky_objects['sun'] = self.canvas.create_oval(cx-30, cy-30, cx+30, cy+30, fill="#FFD700", outline="#FFA500", width=2)
+            self.canvas.configure(bg="#87CEEB") # Day sky
+            self.lbl_moon.config(text="")
+        else:
+            # Draw Moon
+            # Moon phase logic
+            phase_name = get_moon_phase_name(now.day, now.month, now.year)
+            mx = int((0.1 + 0.8 * ((h - 18) / 12.0)) * w) if h > 18 else int((0.1 + 0.8 * ((h + 6) / 12.0)) * w)
+            my = int(0.3 * (h_canvas - 50))
+            
+            # Simple visual representation of phase (color/size variation)
+            moon_color = "#F4F6F0"
+            if "Full" in phase_name: moon_color = "#FFFFFF"
+            elif "New" in phase_name: moon_color = "#CCCCCC"
+            
+            self.sky_objects['moon'] = self.canvas.create_oval(mx-25, my-25, mx+25, my+25, fill=moon_color, outline="#DDD", width=1)
+            self.sky_objects['moon_text'] = self.canvas.create_text(mx, my+40, text=phase_name, fill="white", font=("Arial", 10))
+            
+            # Night Sky Gradient simulation (solid dark blue for simplicity)
+            self.canvas.configure(bg="#0B1026")
+
+        self.root.after(60000, self.update_celestial) # Update every minute
 
     def animate_water(self):
         if not pump_active:
             return
             
-        w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
         
-        # Update Soil Color dynamically
-        if self.soil_rect:
-            self.canvas.itemconfig(self.soil_rect, fill="#5D4037")
-
         for drop in self.drops:
             self.canvas.move(drop['id'], 0, drop['speed'])
             drop['y'] += drop['speed']
             
-            # Reset drop if it hits bottom
             if drop['y'] > h:
                 drop['y'] = -20
                 self.canvas.coords(drop['id'], drop['x'], drop['y'], drop['x'], drop['y']+18)
         
-        # Schedule next frame (approx 30 FPS)
         if pump_active:
             self.anim_job = self.root.after(33, self.animate_water)
 
@@ -253,7 +326,6 @@ class GardenApp:
             self.draw_scene(False)
             return
 
-        # Watering Phase
         phase = "WATERING"
         self.lbl_status.config(text=f"Status: WATERING (Cycle {current_cycle+1}/{TOTAL_CYCLES})", fg="blue")
         self.draw_scene(True)
