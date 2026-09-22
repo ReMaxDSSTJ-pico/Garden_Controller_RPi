@@ -1,13 +1,20 @@
-# -*- coding: utf-8 -*-
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import ttk
 import datetime
 import time
 import os
 import sys
-import math
 import random
+
+# Try to import PIL for image handling
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+    print("Warning: PIL (Pillow) not found. Install with: sudo apt install python3-pil")
 
 # --- GPIO Library Detection (Pi 5 vs Pi 3/4) ---
 USING_LGPIO = False
@@ -23,18 +30,17 @@ except ImportError:
         USING_LGPIO = False
         print("Detected RPi.GPIO library (Pi 3/4 mode)")
     except ImportError:
-        print("Error: Neither lgpio nor RPi.GPIO found. Please install one.")
+        print("Error: Neither lgpio nor RPi.GPIO found.")
         sys.exit(1)
 
 # --- Configuration ---
 RELAY_PINS = [17, 27, 22, 23]  # GPIO pins for Relays 1-4
-DEFAULT_ON_TIMES = [60, 120, 180, 240]  # Default ON times in seconds (1, 2, 3, 4 min)
-OFF_TIMES = [300, 180, 120, 60]  # Fixed OFF times in seconds (5, 3, 2, 1 min)
+DEFAULT_ON_TIMES = [60, 120, 180, 240]  # Default ON times in seconds
+OFF_TIMES = [300, 180, 120, 60]  # Fixed OFF times in seconds
 NUM_ZONES = 4
 
 # Global State
 stop_requested = False
-zone_timers = []  # List of timer objects
 zone_active = [False] * NUM_ZONES
 zone_on_times = DEFAULT_ON_TIMES.copy()
 
@@ -90,7 +96,8 @@ class GardenApp:
         header = tk.Frame(root, bg="#2E8B57", height=60)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="\U0001F345 Pixel Art Tomato Garden", font=("Arial", 20, "bold"), 
+        # Using Unicode escape for compatibility
+        tk.Label(header, text="\U0001F345 Smart Tomato Garden", font=("Arial", 20, "bold"), 
                  bg="#2E8B57", fg="white").pack(pady=10)
         
         # Status Panel
@@ -111,11 +118,10 @@ class GardenApp:
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
         self.zone_drops = [[] for _ in range(NUM_ZONES)]
-        self.zone_plant_ids = [[] for _ in range(NUM_ZONES)]
+        self.bg_image_id = None
         
-        # Draw initial scene
-        self.draw_background()
-        self.draw_all_plants()
+        # Load and Draw Background Image
+        self.load_background_image()
         
         # Controls
         ctrl_frame = tk.Frame(root, bg="#f0f8ff")
@@ -140,7 +146,7 @@ class GardenApp:
             
             tk.Label(z_frame, text=f"Zone {i+1}", font=("Arial", 12, "bold"), bg="white").pack()
             
-            led = tk.Label(z_frame, text="●", font=("Arial", 16), bg="white", fg="#ccc")
+            led = tk.Label(z_frame, text="\u25CF", font=("Arial", 16), bg="white", fg="#ccc") # Bullet character
             led.pack()
             self.zone_leds.append(led)
             
@@ -162,114 +168,57 @@ class GardenApp:
         info_lbl.pack(side=tk.BOTTOM, pady=5)
         
         self.running = False
-        self.anim_job = None
 
-    def draw_background(self):
-        self.canvas.delete("bg")
-        w, h = 800, 250
+    def load_background_image(self):
+        self.canvas.delete("all")
+        w, h = 760, 250
         
-        # Sky Gradient
-        for y in range(0, 180, 4):
-            factor = y / 180.0
-            r = int(63 * (1-factor) + 121 * factor)
-            g = int(142 * (1-factor) + 195 * factor)
-            b = int(226 * (1-factor) + 252 * factor)
-            color = f"#{r:02x}{g:02x}{b:02x}"
-            self.canvas.create_rectangle(0, y, w, y+4, fill=color, outline="", tags="bg")
-            
-        # Ground
-        self.canvas.create_rectangle(0, 180, w, h, fill="#5D4037", outline="", tags="bg")
-        self.canvas.create_rectangle(0, 180, w, 185, fill="#795548", outline="", tags="bg")
+        image_path = "TomatoGarden.jpg"
         
-        # Grass tufts
-        for x in range(0, w, 15):
-            offset = random.randint(-2, 2)
-            self.canvas.create_line(x, 180, x-3+offset, 170, fill="#4CAF50", width=2, tags="bg")
-            self.canvas.create_line(x+5, 180, x+2+offset, 168, fill="#388E3C", width=2, tags="bg")
+        if HAS_PIL and os.path.exists(image_path):
+            try:
+                img = Image.open(image_path)
+                # Resize to fit canvas while maintaining aspect ratio or stretching to fill
+                img_resized = img.resize((w, h), Image.Resampling.LANCZOS)
+                self.photo = ImageTk.PhotoImage(img_resized)
+                self.bg_image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+                print(f"Loaded image: {image_path}")
+            except Exception as e:
+                print(f"Error loading image: {e}")
+                self.draw_fallback_background()
+        else:
+            print(f"Image not found: {image_path}. Ensure you downloaded it to /home/spiderman/workspace/")
+            self.draw_fallback_background()
 
-    def draw_pixel_art_plant(self, center_x, ground_y, stage):
-        """Draws realistic pixel-art style plants for 4 stages"""
-        items = []
-        soil_y = ground_y
-        
-        if stage == 1: # Sprout
-            # Stem
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-15, fill="#2E7D32", width=2))
-            # Two small leaves
-            items.append(self.canvas.create_oval(center_x-8, soil_y-12, center_x-2, soil_y-6, fill="#4CAF50", outline=""))
-            items.append(self.canvas.create_oval(center_x+2, soil_y-12, center_x+8, soil_y-6, fill="#66BB6A", outline=""))
-            
-        elif stage == 2: # Young Plant
-            # Main stem
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-25, fill="#1B5E20", width=3))
-            # Lower leaves
-            items.append(self.canvas.create_polygon(center_x-15, soil_y-10, center_x-5, soil_y-15, center_x-10, soil_y-5, fill="#388E3C", outline=""))
-            items.append(self.canvas.create_polygon(center_x+15, soil_y-10, center_x+5, soil_y-15, center_x+10, soil_y-5, fill="#4CAF50", outline=""))
-            # Upper leaves
-            items.append(self.canvas.create_polygon(center_x-12, soil_y-20, center_x-2, soil_y-25, center_x-8, soil_y-15, fill="#2E7D32", outline=""))
-            items.append(self.canvas.create_polygon(center_x+12, soil_y-20, center_x+2, soil_y-25, center_x+8, soil_y-15, fill="#388E3C", outline=""))
-            
-        elif stage == 3: # Flowering
-            # Bushy stem
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-35, fill="#1B5E20", width=4))
-            # Large foliage clusters
-            items.append(self.canvas.create_oval(center_x-20, soil_y-10, center_x-5, soil_y+5, fill="#2E7D32", outline=""))
-            items.append(self.canvas.create_oval(center_x+5, soil_y-10, center_x+20, soil_y+5, fill="#388E3C", outline=""))
-            items.append(self.canvas.create_oval(center_x-15, soil_y-25, center_x, soil_y-10, fill="#4CAF50", outline=""))
-            items.append(self.canvas.create_oval(center_x, soil_y-25, center_x+15, soil_y-10, fill="#66BB6A", outline=""))
-            # Yellow Flowers
-            items.append(self.canvas.create_oval(center_x-8, soil_y-18, center_x-2, soil_y-12, fill="#FFEB3B", outline="#FBC02D"))
-            items.append(self.canvas.create_oval(center_x+2, soil_y-22, center_x+8, soil_y-16, fill="#FFEB3B", outline="#FBC02D"))
-            # Small green tomatoes
-            items.append(self.canvas.create_oval(center_x-5, soil_y-5, center_x+2, soil_y+2, fill="#8BC34A", outline=""))
-            
-        elif stage == 4: # Mature Fruit
-            # Thick main stem
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y-45, fill="#004D40", width=5))
-            # Dense foliage
-            items.append(self.canvas.create_oval(center_x-25, soil_y-5, center_x-10, soil_y+10, fill="#1B5E20", outline=""))
-            items.append(self.canvas.create_oval(center_x+10, soil_y-5, center_x+25, soil_y+10, fill="#2E7D32", outline=""))
-            items.append(self.canvas.create_oval(center_x-20, soil_y-30, center_x-5, soil_y-15, fill="#388E3C", outline=""))
-            items.append(self.canvas.create_oval(center_x+5, soil_y-30, center_x+20, soil_y-15, fill="#4CAF50", outline=""))
-            items.append(self.canvas.create_oval(center_x-10, soil_y-45, center_x+10, soil_y-30, fill="#2E7D32", outline=""))
-            # Large Red Tomatoes
-            items.append(self.canvas.create_oval(center_x-12, soil_y-8, center_x-2, soil_y+4, fill="#D32F2F", outline="#B71C1C"))
-            items.append(self.canvas.create_oval(center_x+2, soil_y-12, center_x+12, soil_y, fill="#F44336", outline="#D32F2F"))
-            items.append(self.canvas.create_oval(center_x-8, soil_y-20, center_x+2, soil_y-10, fill="#D32F2F", outline="#B71C1C"))
-            # Highlight on tomato
-            items.append(self.canvas.create_oval(center_x-10, soil_y-6, center_x-6, soil_y-2, fill="#FFCDD2", outline=""))
-            
-        return items
+    def draw_fallback_background(self):
+        """Draws a simple blue/brown background if image fails"""
+        self.canvas.create_rectangle(0, 0, 800, 180, fill="#87CEEB", outline="")
+        self.canvas.create_rectangle(0, 180, 800, 250, fill="#5D4037", outline="")
+        self.canvas.create_text(400, 125, text="Image Not Found", font=("Arial", 20), fill="white")
+        self.canvas.create_text(400, 150, text="Download TomatoGarden.jpg", font=("Arial", 12), fill="white")
 
-    def draw_all_plants(self):
-        self.canvas.delete("plant")
-        self.canvas.delete("drops")
+    def init_water_drops(self):
+        """Initialize 10 drops per zone based on approximate plant positions"""
+        # Assuming 4 zones evenly spaced across 800px width
+        # Zones centers approx: 100, 300, 500, 700
+        zone_centers = [100, 300, 500, 700]
+        ground_y = 180 # Approximate ground level based on standard image
+        
         for i in range(NUM_ZONES):
-            self.zone_plant_ids[i] = []
             self.zone_drops[i] = []
+            center_x = zone_centers[i]
             
-            # Calculate position for 4 zones
-            panel_width = 800 // NUM_ZONES
-            center_x = (panel_width * i) + (panel_width // 2)
-            ground_y = 180
-            
-            # Draw Plant
-            plant_items = self.draw_pixel_art_plant(center_x, ground_y, i+1)
-            self.zone_plant_ids[i].extend(plant_items)
-            
-            # Create 10 Water Drops (Hidden initially)
             for j in range(10):
                 dx = center_x - 20 + (j * 4)
                 dy = -20 - (j * 10)
+                # Create drop but hide initially
                 drop = self.canvas.create_line(dx, dy, dx, dy+12, fill="#00BFFF", width=3, capstyle=tk.ROUND, state='hidden')
                 self.zone_drops[i].append({'id': drop, 'x': dx, 'y': dy, 'speed': 4 + (j % 3)})
 
     def animate_zone(self, zone_idx):
         if not zone_active[zone_idx]:
-            self.canvas.itemconfig("drops", state='hidden') # Hide all if stopped
             return
 
-        # Show drops for this zone
         for drop_data in self.zone_drops[zone_idx]:
             self.canvas.itemconfig(drop_data['id'], state='normal')
             self.canvas.move(drop_data['id'], 0, drop_data['speed'])
@@ -277,9 +226,10 @@ class GardenApp:
             
             # Reset if hits ground (approx y=180)
             if drop_data['y'] > 180:
-                drop_data['y'] = -20 - (random.randint(0, 20))
-                center_x = (800 // NUM_ZONES) * zone_idx + (800 // NUM_ZONES // 2)
-                drop_data['x'] = center_x - 20 + (random.randint(0, 80))
+                drop_data['y'] = -20 - random.randint(0, 20)
+                # Keep X within the zone area roughly
+                base_x = [100, 300, 500, 700][zone_idx]
+                drop_data['x'] = base_x - 20 + random.randint(0, 40)
                 self.canvas.coords(drop_data['id'], drop_data['x'], drop_data['y'], drop_data['x'], drop_data['y']+12)
         
         if zone_active[zone_idx]:
@@ -291,7 +241,7 @@ class GardenApp:
 
     def adjust_time(self, idx, delta):
         new_time = zone_on_times[idx] + delta
-        if 10 <= new_time <= 600: # 10s to 10min
+        if 10 <= new_time <= 600:
             zone_on_times[idx] = new_time
             self.time_labels[idx].config(text=f"{new_time}s ON")
 
@@ -300,6 +250,10 @@ class GardenApp:
         stop_requested = False
         self.lbl_status.config(text="Status: WATERING ALL ZONES", fg="blue")
         
+        # Initialize drops if not already done (in case image loaded late)
+        if not self.zone_drops[0]:
+            self.init_water_drops()
+
         # Start all relays
         for i in range(NUM_ZONES):
             set_relay(i, True)
@@ -315,11 +269,9 @@ class GardenApp:
         if stop_requested: return
         set_relay(idx, False)
         self.update_led(idx, False)
-        # Hide drops for this zone
         for drop_data in self.zone_drops[idx]:
             self.canvas.itemconfig(drop_data['id'], state='hidden')
         
-        # Check if all stopped
         if not any(zone_active):
             self.lbl_status.config(text="Status: CYCLE COMPLETE", fg="green")
 
@@ -342,6 +294,10 @@ if __name__ == "__main__":
     setup_gpio()
     root = tk.Tk()
     app = GardenApp(root)
+    
+    # Initialize drops after UI is ready
+    app.init_water_drops()
+    
     app.update_clock()
     
     def on_close():
