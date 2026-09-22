@@ -102,7 +102,7 @@ class GardenApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Smart Garden Controller - Pi 5")
-        self.root.geometry("800x600")
+        self.root.geometry("800x640")
         self.root.configure(bg="#f0f8ff")
         
         # Header
@@ -191,10 +191,10 @@ class GardenApp:
             self.canvas.create_oval(x+5, ground_y-70, x+15, ground_y-60, fill="#FF6666", outline="#CC0000")
             self.canvas.create_oval(x-15, ground_y-80, x-5, ground_y-70, fill="#FF4444", outline="#CC0000")
 
-        # Create 150 Large Water Drops (only if watering)
+        # Create 50 Large Water Drops (only if watering)
         if watering:
-            for i in range(150):
-                dx = (i * (w // 150)) % w
+            for i in range(50):
+                dx = (i * (w // 50)) % w
                 dy = (i * 37) % h # Staggered start
                 speed = 5 + (i % 5) # Varied speed
                 drop = self.canvas.create_line(dx, dy, dx, dy+18, fill="#00BFFF", width=4, capstyle=tk.ROUND)
