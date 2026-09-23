@@ -113,7 +113,7 @@ class GardenApp:
         # Animation Canvas
         self.canvas_frame = tk.Frame(root, bg="#e0f7fa", relief=tk.SUNKEN, bd=2)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
-        self.canvas = tk.Canvas(self.canvas_frame, bg="gray24", highlightthickness=0, width=800, height=250)
+        self.canvas = tk.Canvas(self.canvas_frame, bg="gray20", highlightthickness=0, width=800, height=250)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
         self.zone_drops = [[] for _ in range(NUM_ZONES)]
