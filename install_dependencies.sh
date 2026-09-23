@@ -71,6 +71,12 @@ else
     fi
 fi
 
+# Install Emoji Font Support
+echo "[6/7] Installing Noto Color Emoji font..."
+sudo apt install -y fonts-noto-color-emoji
+# Refresh the font cache so applications can see the new emoji glyphs immediately
+fc-cache -f -v > /dev/null 2>&1
+echo "   -> Emoji fonts installed and font cache updated."
 
 # Make the main application executable
 chmod +x garden_controller_gui.py 2>/dev/null || true
