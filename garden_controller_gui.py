@@ -51,7 +51,7 @@ def setup_gpio():
             h_chip = lgpio.gpiochip_open(0)
             for pin in RELAY_PINS:
                 lgpio.gpio_claim_output(h_chip, pin)
-                lgpio.gpio_write(h_chip, pin, 0)
+                lgpio.gpio_write(h_chip, pin, 1)
         except Exception as e:
             print(f"Critical LGPIO Error: {e}")
             sys.exit(1)
@@ -59,7 +59,7 @@ def setup_gpio():
         GPIO.setmode(GPIO.BCM)
         for pin in RELAY_PINS:
             GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.LOW)
+            GPIO.output(pin, GPIO.HIGH)
 
 def set_relay(zone_idx, state):
     pin = RELAY_PINS[zone_idx]
