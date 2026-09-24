@@ -172,7 +172,11 @@ class GardenApp:
         self.canvas.delete("all")
         w, h = 760, 250
         
-        image_path = "TomatoGarden.jpg"
+# 1. Get the absolute path to the directory this controller.py file lives in
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Safely join that path with your image filename
+        image_path = os.path.join(SCRIPT_DIR, "TomatoGarden.jpg")        
         
         if HAS_PIL and os.path.exists(image_path):
             try:
