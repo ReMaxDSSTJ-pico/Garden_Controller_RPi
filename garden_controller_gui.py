@@ -63,7 +63,7 @@ def setup_gpio():
 
 def set_relay(zone_idx, state):
     pin = RELAY_PINS[zone_idx]
-    val = 1 if state else 0
+    val = 0 if state else 1
     if USING_LGPIO:
         lgpio.gpio_write(h_chip, pin, val)
     else:
