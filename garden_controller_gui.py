@@ -282,7 +282,7 @@ class GardenApp:
         for i in range(NUM_ZONES):
             self.zone_drops[i] = []
             center_x = (panel_width * i) + (panel_width // 2)
-            ground_y = 180
+            ground_y = 220
 
             # Create 10 Water Drops per zone (hidden initially)
             for j in range(10):
