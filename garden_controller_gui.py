@@ -49,31 +49,38 @@ zone_on_times = DEFAULT_ON_TIMES.copy()
 
 
 def get_seasonal_schedule():
-    """Returns days interval based on calendar month.
-    August             -> daily (every 1 day)
-    July & September   -> every 2 days
-    December & January -> every 4 days
-    All other months   -> every 3 days
+    """Returns watering interval in days based on the calendar month.
+    August            -> daily (every 1 day)
+    July & September  -> every 2 days
+    December & January-> every 4 days
+    All other months  -> every 3 days
     """
     month = datetime.datetime.now().month
     if month == 8:
         return 1   # August: water daily
     elif month in (7, 9):
-        return 2   # July / September: every 2 days
+        return 2   # July & September: every 2 days
     elif month in (12, 1):
-        return 4   # December / January: every 4 days
+        return 4   # December & January: every 4 days
     else:
-        return 3   # Feb-Jun, Oct-Nov: every 3 days
+        return 3   # Rest of the year: every 3 days
 
 
-def get_season_name(interval):
-    """Human-readable name of the active watering rule."""
-    names = {1: "AUGUST", 2: "JULY/SEPTEMBER", 3: "REGULAR", 4: "DEC/JAN"}
-    return names.get(interval, "REGULAR")
+def get_season_name():
+    """Returns the display name for the current watering schedule."""
+    month = datetime.datetime.now().month
+    if month == 8:
+        return "AUGUST"
+    elif month in (7, 9):
+        return "JULY/SEPTEMBER"
+    elif month in (12, 1):
+        return "DECEMBER/JANUARY"
+    else:
+        return "STANDARD"
 
 
 def calculate_next_run():
-    """Calculate next run datetime based on monthly rules. Returns a datetime."""
+    """Calculate next run datetime based on seasonal rules. Returns a datetime."""
     now = datetime.datetime.now()
     interval = get_seasonal_schedule()
     h, m = map(int, WATER_TIME.split(":"))
@@ -141,7 +148,7 @@ def cleanup_gpio():
 class GardenApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("\U0001F345 Smart Tomato Garden Controller")
+        self.root.title("Smart Tomato Garden Controller")
         self.root.geometry("800x700")
         self.root.configure(bg="#f0f8ff")
 
@@ -169,7 +176,7 @@ class GardenApp:
         self.canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
 
         self.canvas = tk.Canvas(self.canvas_frame, bg="#e0f7fa", highlightthickness=0,
-                                width=800, height=250)
+                                width=760, height=250)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.zone_drops = [[] for _ in range(NUM_ZONES)]
@@ -239,7 +246,7 @@ class GardenApp:
     # ---------- Drawing ----------
     def draw_background(self):
         self.canvas.delete("bg")
-        w, h = 800, 250
+        w, h = 760, 280
 
         img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), IMAGE_FILE)
         if HAS_PIL and os.path.exists(img_path):
@@ -268,82 +275,14 @@ class GardenApp:
             self.canvas.create_line(x, 180, x - 3 + offset, 170, fill="#4CAF50", width=2, tags="bg")
             self.canvas.create_line(x + 5, 180, x + 2 + offset, 168, fill="#388E3C", width=2, tags="bg")
 
-    def draw_pixel_art_plant(self, center_x, ground_y, stage):
-        """Draws pixel-art style plants for growth stages 1-4."""
-        items = []
-        soil_y = ground_y
-
-        if stage == 1:  # Sprout
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y - 15,
-                                                 fill="#2E7D32", width=2, tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 8, soil_y - 12, center_x - 2, soil_y - 6,
-                                                 fill="#4CAF50", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 2, soil_y - 12, center_x + 8, soil_y - 6,
-                                                 fill="#66BB6A", outline="", tags="plant"))
-
-        elif stage == 2:  # Young Plant
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y - 25,
-                                                 fill="#1B5E20", width=3, tags="plant"))
-            items.append(self.canvas.create_polygon(center_x - 15, soil_y - 10, center_x - 5, soil_y - 15,
-                                                    center_x - 10, soil_y - 5, fill="#388E3C", outline="", tags="plant"))
-            items.append(self.canvas.create_polygon(center_x + 15, soil_y - 10, center_x + 5, soil_y - 15,
-                                                    center_x + 10, soil_y - 5, fill="#4CAF50", outline="", tags="plant"))
-            items.append(self.canvas.create_polygon(center_x - 12, soil_y - 20, center_x - 2, soil_y - 25,
-                                                    center_x - 8, soil_y - 15, fill="#2E7D32", outline="", tags="plant"))
-            items.append(self.canvas.create_polygon(center_x + 12, soil_y - 20, center_x + 2, soil_y - 25,
-                                                    center_x + 8, soil_y - 15, fill="#388E3C", outline="", tags="plant"))
-
-        elif stage == 3:  # Flowering
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y - 35,
-                                                 fill="#1B5E20", width=4, tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 20, soil_y - 10, center_x - 5, soil_y + 5,
-                                                 fill="#2E7D32", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 5, soil_y - 10, center_x + 20, soil_y + 5,
-                                                 fill="#388E3C", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 15, soil_y - 25, center_x, soil_y - 10,
-                                                 fill="#4CAF50", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x, soil_y - 25, center_x + 15, soil_y - 10,
-                                                 fill="#66BB6A", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 8, soil_y - 18, center_x - 2, soil_y - 12,
-                                                 fill="#FFEB3B", outline="#FBC02D", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 2, soil_y - 22, center_x + 8, soil_y - 16,
-                                                 fill="#FFEB3B", outline="#FBC02D", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 5, soil_y - 5, center_x + 2, soil_y + 2,
-                                                 fill="#8BC34A", outline="", tags="plant"))
-
-        elif stage == 4:  # Mature Fruit
-            items.append(self.canvas.create_line(center_x, soil_y, center_x, soil_y - 45,
-                                                 fill="#004D40", width=5, tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 25, soil_y - 5, center_x - 10, soil_y + 10,
-                                                 fill="#1B5E20", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 10, soil_y - 5, center_x + 25, soil_y + 10,
-                                                 fill="#2E7D32", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 20, soil_y - 30, center_x - 5, soil_y - 15,
-                                                 fill="#388E3C", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 5, soil_y - 30, center_x + 20, soil_y - 15,
-                                                 fill="#4CAF50", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 10, soil_y - 45, center_x + 10, soil_y - 30,
-                                                 fill="#2E7D32", outline="", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 12, soil_y - 8, center_x - 2, soil_y + 4,
-                                                 fill="#D32F2F", outline="#B71C1C", tags="plant"))
-            items.append(self.canvas.create_oval(center_x + 2, soil_y - 12, center_x + 12, soil_y,
-                                                 fill="#F44336", outline="#D32F2F", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 8, soil_y - 20, center_x + 2, soil_y - 10,
-                                                 fill="#D32F2F", outline="#B71C1C", tags="plant"))
-            items.append(self.canvas.create_oval(center_x - 10, soil_y - 6, center_x - 6, soil_y - 2,
-                                                 fill="#FFCDD2", outline="", tags="plant"))
-        return items
-
     def draw_all_plants(self):
         self.canvas.delete("plant")
         self.canvas.delete("drops")
-        panel_width = 800 // NUM_ZONES
+        panel_width = 760 // NUM_ZONES
         for i in range(NUM_ZONES):
             self.zone_drops[i] = []
             center_x = (panel_width * i) + (panel_width // 2)
             ground_y = 180
-
-            self.draw_pixel_art_plant(center_x, ground_y, i + 1)
 
             # Create 10 Water Drops per zone (hidden initially)
             for j in range(10):
@@ -361,7 +300,7 @@ class GardenApp:
                 self.canvas.itemconfig(d['id'], state='hidden')
             return
 
-        panel_width = 800 // NUM_ZONES
+        panel_width = 760 // NUM_ZONES
         center_x = (panel_width * zone_idx) + (panel_width // 2)
 
         for d in self.zone_drops[zone_idx]:
@@ -439,7 +378,7 @@ class GardenApp:
 
         # Bottom status bar: next watering info + countdown
         interval = get_seasonal_schedule()
-        season = get_season_name(interval)
+        season = get_season_name()
         next_str = self.next_run_dt.strftime("%Y-%m-%d %H:%M")
         self.lbl_next.config(text=f"\U0001F4C5 Next Watering: {next_str}  ({season}: every {interval} day{'s' if interval > 1 else ''})")
 
