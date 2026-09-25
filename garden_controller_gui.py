@@ -307,7 +307,7 @@ class GardenApp:
             self.canvas.itemconfig(d['id'], state='normal')
             self.canvas.move(d['id'], 0, d['speed'])
             d['y'] += d['speed']
-            if d['y'] > 180:
+            if d['y'] > 240:
                 d['y'] = -20 - random.randint(0, 20)
                 d['x'] = center_x - 25 + random.randint(0, 50)
                 self.canvas.coords(d['id'], d['x'], d['y'], d['x'], d['y'] + 12)
